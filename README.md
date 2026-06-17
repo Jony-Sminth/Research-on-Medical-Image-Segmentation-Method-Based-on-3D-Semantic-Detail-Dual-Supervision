@@ -1,0 +1,1 @@
+# Research-on-Medical-Image-Segmentation-Method-Based-on-3D-Semantic-Detail-Dual-Supervision
