@@ -302,14 +302,9 @@ class ControlLDM(LatentDiffusion):
         self.boundary_type = kwargs.pop('boundary_type', 'sobel')
         self.alpha_max = kwargs.pop('alpha_max', 4.0)
         self.boundary_warmup_steps = kwargs.pop('boundary_warmup_steps', 0)  # 0=固定alpha
-        self.warmup_mode = kwargs.pop('warmup_mode', 'step')
+        self.warmup_mode = kwargs.pop('warmup_mode', 'step')  # 
         self.mode = kwargs.pop('mode', 'siamese')  # 默认siamese，现有yaml不受影响
         self.normalize_boundary = kwargs.pop('normalize_boundary', True)
-        # ===== 路线B：分割反馈 =====
-        self.use_seg_feedback = kwargs.pop('use_seg_feedback', False)
-        self.lambda_seg_max   = kwargs.pop('lambda_seg_max', 0.1)
-        self.seg_warmup_steps = kwargs.pop('seg_warmup_steps', 1000)
-        self.seg_model        = None   # 由训练脚本注入
         # ===========================================================================
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
@@ -437,7 +432,7 @@ class ControlLDM(LatentDiffusion):
         shape = (self.channels, h // 8, w // 8)
         samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size, shape, cond, verbose=False, **kwargs)
         return samples, intermediates
-
+    
     def get_boundary_weight_distance(self, mask_control, target_shape, alpha=4.0):
         """
         归一化由 p_losses 调用处统一处理，此处不做。
@@ -470,7 +465,6 @@ class ControlLDM(LatentDiffusion):
         weight_map = F.interpolate(weight_map, size=target_shape,
                                 mode='bilinear', align_corners=False)
         return weight_map
-
     def get_boundary_weight(self, mask_control, target_shape, alpha=4.0):
         """
         Sobel 边界权重图（纯 GPU，无 CPU 同步）
@@ -505,25 +499,6 @@ class ControlLDM(LatentDiffusion):
             weight_map, size=target_shape, mode='bilinear', align_corners=False
         )
         return weight_map  # [B,1,H_lat,W_lat]
-
-    @staticmethod
-    def dice_ce_loss(logits, target, eps=1e-6):
-        """路线B：Dice + BCE 损失
-        logits: [B,1,H,W]  未过 sigmoid
-        target: [B,C,H,W]  0/1，若 C>1 自动转单通道
-        """
-        # 如果 target 是多通道（比如 RGB mask），转单通道
-        if target.shape[1] > 1:
-            target = target.mean(dim=1, keepdim=True)
-        target = (target > 0.5).float()
-
-        bce = F.binary_cross_entropy_with_logits(logits, target)
-        prob = torch.sigmoid(logits)
-        inter = (prob * target).sum(dim=[1, 2, 3])
-        dice = 1 - (2 * inter + eps) / (
-            prob.sum(dim=[1, 2, 3]) + target.sum(dim=[1, 2, 3]) + eps
-        )
-        return bce + dice.mean()
 
     def configure_optimizers(self):
         lr = self.learning_rate
@@ -584,7 +559,7 @@ class ControlLDM(LatentDiffusion):
         # Loss 0
         loss_simple = weights_mask * self.get_loss(model_output_mask, target, mean=False).mean([1, 2, 3])
         print(f"loss_simple_mask: {loss_simple.mean():.6f}")
-
+        
         if self.mode == 'siamese':
             # Loss 1
             if weights_image.all():
@@ -593,6 +568,47 @@ class ControlLDM(LatentDiffusion):
                 print(f"loss_simple_image: {loss_simple_image.mean():.6f}")
                 loss_simple = loss_simple + weights_image * loss_simple_image
 
+            # =========================================================
+            # Loss 2：边界感知噪声一致性损失（本文唯一改动）
+            # 原版：均匀加权 MSE(mask_output, image_output.detach())
+            # 改进：对皮肤病变边界区域施加更强权重
+            # 注意：model_output_image.detach() 与原版一致，
+            #       boundary_weight 在 no_grad 下计算，不参与反传，
+            #       梯度路径与原版完全相同，只是边界处 loss 更大。
+            # =========================================================
+            # if weights_mask_2_image.all():
+            #     # 逐像素误差，保留空间维度 [B, C, H_lat, W_lat]
+            #     pixel_loss = self.get_loss(
+            #         model_output_mask,
+            #         model_output_image.detach(),  # 与原版一致：detach image 路
+            #         mean=False
+            #     )
+
+            #     # 边界权重图，全程在 GPU 上，no_grad
+            #     alpha_max = 3.0         # 由消融实验一确定（你当前用的是4.0，不是文档里的2.0，注意对齐）
+            #     warmup_steps = 1000     # 由消融实验二确定（候选 500/1000/1500）
+            #     alpha = alpha_max * min(self.global_step / warmup_steps, 1.0)
+            #     with torch.no_grad():
+            #         boundary_weight = self.get_boundary_weight(
+            #             cond["c_concat_mask"][0],
+            #             pixel_loss.shape[-2:],
+            #             alpha=alpha
+            #         )
+            #         # 归一化，保持总损失量级与原版一致
+            #         boundary_weight = boundary_weight / boundary_weight.mean(dim=[2, 3], keepdim=True)
+            #     # with torch.no_grad():
+            #     #     boundary_weight = self.get_boundary_weight(
+            #     #         cond["c_concat_mask"][0],  # [B, C, H, W]
+            #     #         pixel_loss.shape[-2:],     # (H_lat, W_lat)
+            #     #         alpha=4.0
+            #     #     )  # [B, 1, H_lat, W_lat]，广播到 [B, C, H_lat, W_lat]
+
+            #     loss_simple_mask_2_image = (boundary_weight * pixel_loss).mean([1, 2, 3])
+            #     print(f"loss_simple_mask_2_image(boundary-aware): {loss_simple_mask_2_image.mean():.6f}")
+            #     loss_simple = loss_simple + weights_mask_2_image * loss_simple_mask_2_image
+            # =========================================================
+            # Loss 2：边界感知噪声一致性损失（距离变换版，固定alpha，含诊断打印）
+            # =========================================================
             # =========================================================
             # Loss 2：边界感知噪声一致性损失
             # =========================================================
@@ -622,7 +638,13 @@ class ControlLDM(LatentDiffusion):
                             boundary_weight = self.get_boundary_weight_distance(
                                 cond["c_concat_mask"][0], pixel_loss.shape[-2:], alpha=alpha
                             )
-
+                        # ===== E-12 诊断打印（只打前5步，拿到数据后删掉） =====
+                        # if self.global_step < 5:
+                        #     peak = boundary_weight.amax(dim=[2, 3]).mean().item()
+                        #     mean = boundary_weight.mean(dim=[2, 3]).mean().item()
+                        #     print(f"[DIAG|{self.boundary_type}] step={self.global_step} | peak_before_norm={peak:.4f} | mean_before_norm={mean:.4f} | ratio={peak/mean:.4f}")
+                        
+                        
                         # 归一化，保持总损失量级与原版一致（在 no_grad 里）
                         if self.normalize_boundary:
                             boundary_weight = boundary_weight / boundary_weight.mean(dim=[2, 3], keepdim=True)
@@ -633,40 +655,6 @@ class ControlLDM(LatentDiffusion):
                     loss_simple_mask_2_image = pixel_loss.mean([1, 2, 3])
 
                 loss_simple = loss_simple + weights_mask_2_image * loss_simple_mask_2_image
-
-            # =========================================================
-            # Loss 4：路线B —— 分割反馈（单步 x0 预测 + 冻结分割器）
-            # =========================================================
-            if self.use_seg_feedback and self.seg_model is not None:
-                # 1. 单步 x0 预测（不跑 DDIM）
-                x0_pred = self.predict_start_from_noise(
-                    x_noisy, t=t, noise=model_output_mask
-                )
-
-                # 2. VAE 解码到像素空间，值域约 [-1, 1]
-                x_gen = self.decode_first_stage(x0_pred)         # [B, 3, H, W]
-
-                # 3. ★ 关键：S0 训练时输入是 [0,1]，这里要转回 [0,1]
-                x_gen01 = (x_gen + 1.0) / 2.0
-
-                # 4. 冻结分割器前向
-                seg_logits = self.seg_model(x_gen01)             # [B, 1, H, W]
-
-                # 5. mask 真值（0/1）
-                mask_gt = cond["c_concat_mask"][0]               # [B, 1, H, W]
-
-                # 6. Dice + BCE
-                loss_seg = self.dice_ce_loss(seg_logits, mask_gt)
-
-                # 7. λ warmup
-                if self.global_step < self.seg_warmup_steps:
-                    lam = self.lambda_seg_max * self.global_step / max(self.seg_warmup_steps, 1)
-                else:
-                    lam = self.lambda_seg_max
-
-                print(f"loss_seg(routeB): {loss_seg.mean():.6f}  lam={lam:.4f}")
-                loss_simple = loss_simple + lam * loss_seg
-
             # Loss 3（与原版完全一致）
             if (self.global_step > (self.trainer.max_steps * 1 / 3)) and weights_mask_regularization.any():
                 recon_output_image = self.predict_start_from_noise(x_noisy, t=t, noise=model_output_image)
