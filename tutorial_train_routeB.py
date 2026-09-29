@@ -54,7 +54,7 @@ logger_freq      = 1000
 learning_rate    = 1e-5
 sd_locked        = False
 only_mid_control = False
-max_steps        = 10
+max_steps        = 6000
 
 S0_CKPT          = '/home/pc/ckpts/S0.pth'
 # ============================
