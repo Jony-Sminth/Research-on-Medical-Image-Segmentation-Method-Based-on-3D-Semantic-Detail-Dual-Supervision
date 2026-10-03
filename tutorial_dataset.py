@@ -5,13 +5,15 @@ import numpy as np
 
 from torch.utils.data import Dataset
 from PIL import Image
+import os
 import albumentations
 
 
 class MyDataset(Dataset):
     def __init__(self):
         self.data = []
-        root = './data/ISIC2016/prompt.json'
+        dataset_name = os.environ.get('DS_NAME', 'ISIC2016')
+        root = f'./data/{dataset_name}/prompt.json'
         with open(root, 'rt') as f:
             for line in f:
                 self.data.append(json.loads(line))

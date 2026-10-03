@@ -81,7 +81,7 @@ class ISICDataset(Dataset):
 
 # ── 训练主函数 ───────────────────────────────────────────────
 def train(args):
-    set_seed(42)
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 路径配置
@@ -133,7 +133,7 @@ def train(args):
         channels=(16, 32, 64, 128, 256),
         strides=(2, 2, 2, 2),
     ).to(device)
-    torch.manual_seed(42)
+    torch.manual_seed(args.seed)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     criterion = (DiceLoss(sigmoid=True, reduction="mean")
@@ -255,5 +255,7 @@ if __name__ == "__main__":
     parser.add_argument("--mask_suffix",      type=str, default="_Segmentation.png")
     parser.add_argument("--checkpoint_dir",   type=str, default="/mnt/f/seg_experiments/checkpoints")
     parser.add_argument("--log_dir",          type=str, default="/mnt/f/seg_experiments/logs")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+    set_seed(args.seed)
     train(args)

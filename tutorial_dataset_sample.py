@@ -2,6 +2,7 @@ import cv2
 import json
 import random
 import numpy as np
+import os
 
 from torch.utils.data import Dataset
 from PIL import Image
@@ -11,7 +12,8 @@ import albumentations
 class MyDataset(Dataset):
     def __init__(self):
         self.data = []
-        root = './data/prompt.json'
+        dataset_name = os.environ.get('DS_NAME', 'ISIC2016')
+        root = f'./data/{dataset_name}/prompt.json'
         with open(root, 'rt') as f:
             for line in f:
                 self.data.append(json.loads(line))
