@@ -114,3 +114,22 @@ text
 
 **文档版本**：v1
 **生成时间**：2026-10-06
+
+---
+
+## 七、第 13 天补充（2026-10-07）
+
+### 新增实验
+- E-23_N40（论文1 方法）10 种子：Dice 0.7900±0.0055，**比 baseline 差**
+- ISIC2018 E-B FID = 75.67，**比 E-17 (88) 更低**
+
+### 关键发现
+**大论文完整叙事成立**：
+- 论文1：FID/HD95 提升，但下游 Dice **反而下降**
+- 论文2：**弥补论文1 缺陷并超越 baseline**
+- 三组关系：论文1 < baseline < 论文2
+
+### 已完成的图
+- `fig_A_generation_quality.png`
+- `fig_B_real_vs_generated.png`
+- `fig_C_segmentation_v2.png`
